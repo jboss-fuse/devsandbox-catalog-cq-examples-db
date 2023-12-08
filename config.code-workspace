@@ -1,0 +1,13 @@
+{
+	"folders": [
+		{
+			"path": "../examples/jdbc-datasource"
+		},
+		{
+			"path": "../examples/jms-jpa"
+		},
+		{
+			"path": "../examples/jta-jpa"
+		}
+	]
+}

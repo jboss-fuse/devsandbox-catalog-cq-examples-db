@@ -1,0 +1,169 @@
+schemaVersion: 2.2.0
+attributes:
+  controller.devfile.io/storage-type: per-workspace
+metadata:
+  name: devsandbox-catalog-cq-examples-db
+
+projects:
+
+- name: catalog
+  git:
+    remotes:
+      origin: https://github.com/jboss-fuse/devsandbox-catalog-cq-examples-db.git
+
+- name: database
+  git:
+    remotes:
+      origin: https://github.com/jboss-fuse/devsandbox-category-cq-examples-db.git
+
+- name: examples
+  git:
+    remotes:
+      origin: https://github.com/apache/camel-quarkus-examples.git
+
+components:
+  - name: tools
+    container:
+      image: registry.access.redhat.com/ubi8/openjdk-17:1.17
+      memoryLimit: 3Gi
+      env:
+        - name: MAVEN_CONFIG
+          value: ""
+        - name: JAVA_OPTS
+          value: "-XX:MaxRAMPercentage=50.0 -XX:+UseParallelGC -XX:MinHeapFreeRatio=10
+            -XX:MaxHeapFreeRatio=20 -XX:GCTimeRatio=4 -XX:AdaptiveSizePolicyWeight=90
+            -Dsun.zip.disableMemoryMapping=true -Xms20m -Djava.security.egd=file:/dev/./urandom
+            -Duser.home=/home/jboss"
+        - name: MAVEN_OPTS
+          value: $(JAVA_OPTS)
+        - name: VSCODE_DEFAULT_WORKSPACE
+          value: "/projects/catalog/config.code-workspace"
+      endpoints:
+        - exposure: public
+          name: 8080-tcp
+          protocol: http
+          targetPort: 8080
+      volumeMounts:
+        - name: m2
+          path: /home/user/.m2
+      command: [ "tail", "-f", "/dev/null" ]
+
+  - name: webapp-all
+    container:
+      image: quay.io/redhatintegration/tutorial-web-app:latest
+      env:
+        - name: NODE_ENV
+          value: production
+        - name: THREESCALE_WILDCARD_DOMAIN
+          value: local.localdomain
+        - name: OPENSHIFT_VERSION
+          value: '4'
+        - name: PORT
+          value: '5001'
+        - name: WALKTHROUGH_LOCATIONS
+          value: >-
+            https://github.com/djcoleman/devsandbox-category-cq-database?walkthroughsFolder=/docs/labs
+      endpoints:
+        - name: tutorial
+          exposure: public
+          targetPort: 5001
+          protocol: https
+          secure: true
+      memoryLimit: 512Mi
+      mountSources: true
+      volumeMounts:
+        - name: tutorial-storage
+          path: /opt/user-walkthroughs
+
+  - name: database
+    container:
+      image: registry.redhat.io/rhel8/mysql-80:1
+      env:
+        - name: MYSQL_USER
+          value: cquser
+        - name: MYSQL_PASSWORD
+          value: cqpass
+        - name: MYSQL_DATABASE
+          value: testdb
+        - name: MYSQL_ROOT_PASSWORD
+          value: root
+      endpoints:
+        - name: mysql
+          exposure: public
+          targetPort: 3306
+          protocol: tcp
+      memoryLimit: 512M
+  
+  - name: artemis
+    container:
+      image: quay.io/artemiscloud/activemq-artemis-broker:1.0.22
+      env:
+        - name: AMQ_USER
+          value: admin
+        - name: AMQ_PASSWORD
+          value: admin
+      endpoints:
+        - name: artemis
+          exposure: public
+          targetPort: 61616
+          protocol: tcp
+      memoryLimit: 256M
+
+  - name: m2
+    volume:
+      size: 2Gi
+
+  - name: tutorial-storage
+    volume:
+      size: 256Mi
+
+commands:
+  - id: setup-database
+    exec:
+      commandLine: >
+        hostname && sleep 10 && 
+        mysql -uroot testdb -e "GRANT XA_RECOVER_ADMIN on *.* to 'cquser'@'%'; FLUSH PRIVILEGES;" &&
+        mysql -ucquser -pcqpass testdb -e "CREATE TABLE audit_log (id bigint NOT NULL AUTO_INCREMENT, message varchar(255) DEFAULT NULL, PRIMARY KEY (id));"
+      component: database
+
+  - id: start-jta-jpa
+    exec:
+      commandLine: mvn quarkus:dev -Dquarkus.profile=k8s
+      component: tools
+      workingDir: /projects/examples/jta-jpa
+
+  - id: send-hello
+    exec:
+      commandLine: curl -X POST http://localhost:8080/api/messages/hello
+      component: tools
+
+  - id: get-messages
+    exec:
+      commandLine: curl http://localhost:8080/api/messages/
+      component: tools
+
+  - id: send-fail
+    exec:
+      commandLine: curl -X POST http://localhost:8080/api/messages/fail
+      component: tools
+
+  - id: send-crash
+    exec:
+      commandLine: curl -X POST http://localhost:8080/api/messages/crash
+      component: tools
+
+  - id: start-jdbc-datasource
+    exec:
+      commandLine: mvn clean quarkus:dev -Dquarkus.profile=k8s
+      component: tools
+      workingDir: /projects/examples/jdbc-datasource
+
+  - id: start-jms-jpa
+    exec:
+      commandLine: mvn quarkus:dev -Dquarkus.profile=k8s -Dquarkus.artemis.url=$(env | grep SERVICE_PORT_61616_TCP= | cut -d '=' -f 2)
+      component: tools
+      workingDir: /projects/examples/jms-jpa
+
+events:
+  postStart:
+    - setup-database
